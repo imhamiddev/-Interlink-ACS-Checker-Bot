@@ -135,7 +135,6 @@ This will automatically connect your bot to the worker.
 | ----------- | ---------------------------------- |
 | `/start`    | Show welcome message               |
 | `/ACS [ID]` | Get ACS score by numeric ID        |
-| `/give`     | Show current Topic ID (for groups) |
 
 ---
 
