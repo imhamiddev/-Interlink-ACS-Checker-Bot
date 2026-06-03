@@ -56,7 +56,7 @@ wrangler.toml          # Cloudflare Workers config
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/USERNAME/REPO_NAME.git
+git clone https://github.com/imhamiddev/Interlink-ACS-Checker-Bot
 cd REPO_NAME
 ```
 
