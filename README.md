@@ -1,4 +1,4 @@
-# 🤖 Interlink ACS Bot
+# 🤖 Interlink ACS Tracker Telegram Bot
 
 A Telegram bot built on **Cloudflare Workers** that tracks and announces ACS (Ambassador Credit Score) updates for [Interlink](https://interlinklabs.ai) ambassadors inside a Telegram group.
 
