@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Leaderboard</title>
+<link rel="stylesheet" href="/theme.css" />
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  .wrap { max-width: 640px; margin: 0 auto; padding: 0 20px; }
+
+  .me-card {
+    margin: -46px 20px 20px;
+    padding: 18px 22px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    position: relative;
+    z-index: 2;
+  }
+  .me-card .label { font-size: 12px; color: var(--text-muted); font-weight: 500; }
+  .me-card .rank { font-size: 26px; font-weight: 700; color: var(--text); letter-spacing: -0.02em; }
+  .me-card .acs { font-size: 13px; color: var(--text-muted); margin-top: 3px; }
+
+  .list { margin-top: 8px; padding: 8px; }
+  .row {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 13px 12px;
+    border-radius: var(--radius-md);
+  }
+  .row + .row { border-top: 1px solid var(--border); }
+
+  .rank-badge {
+    width: 34px;
+    height: 34px;
+    border-radius: var(--radius-sm);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 13px;
+    background: var(--surface-2);
+    color: var(--text-muted);
+    flex-shrink: 0;
+  }
+
+  .row.tier-1 .rank-badge { background: #fef3d5; color: var(--gold-dark); font-size: 16px; }
+  .row.tier-2 .rank-badge { background: #f0f1f2; color: var(--silver); font-size: 16px; }
+  .row.tier-3 .rank-badge { background: #fbe9e1; color: var(--bronze); font-size: 16px; }
+
+  .row-name { flex: 1; min-width: 0; }
+  .row-name .n { font-size: 14.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; letter-spacing: -0.01em; }
+  .row-name .id { font-size: 11.5px; color: var(--text-faint); margin-top: 1px; }
+  .row-acs { font-weight: 600; font-size: 14.5px; color: var(--text); flex-shrink: 0; letter-spacing: -0.01em; }
+
+  .loadmore-wrap { padding: 18px; text-align: center; }
+  .footnote { text-align: center; color: var(--text-faint); font-size: 12px; padding: 16px 20px 4px; }
+</style>
+</head>
+<body>
+  <div class="header">
+    <p class="eyebrow">🏆 Interlink Ambassadors</p>
+    <h1>Leaderboard</h1>
+    <p class="sub">Ranked by ACS score</p>
+  </div>
+
+  <div class="wrap">
+    <div id="meCard" class="card me-card" style="display:none;">
+      <div>
+        <div class="label">Your rank</div>
+        <div class="acs" id="meAcs">—</div>
+      </div>
+      <div class="rank" id="meRank">—</div>
+    </div>
+
+    <div class="card list" id="list">
+      <div class="skeleton" style="height:56px;margin-bottom:8px;"></div>
+      <div class="skeleton" style="height:56px;margin-bottom:8px;"></div>
+      <div class="skeleton" style="height:56px;"></div>
+    </div>
+
+    <div class="loadmore-wrap" id="loadMoreWrap" style="display:none;">
+      <button class="btn btn-outline" id="loadMoreBtn">Load more</button>
+    </div>
+
+    <p class="footnote" id="footnote"></p>
+  </div>
+
+  <script>
+    const tg = window.Telegram?.WebApp;
+    tg?.ready();
+    tg?.expand();
+
+    const PAGE_SIZE = 25;
+    let offset = 0;
+    let total = 0;
+    let loading = false;
+
+    const listEl = document.getElementById("list");
+    const loadMoreWrap = document.getElementById("loadMoreWrap");
+    const loadMoreBtn = document.getElementById("loadMoreBtn");
+    const footnote = document.getElementById("footnote");
+
+    function medal(rank) {
+      if (rank === 1) return "🥇";
+      if (rank === 2) return "🥈";
+      if (rank === 3) return "🥉";
+      return String(rank);
+    }
+
+    function tierClass(rank) {
+      if (rank === 1) return "tier-1";
+      if (rank === 2) return "tier-2";
+      if (rank === 3) return "tier-3";
+      return "";
+    }
+
+    function escapeHtml(str) {
+      return String(str || "").replace(/[&<>"']/g, (c) => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+      })[c]);
+    }
+
+    function renderRows(users, startRank) {
+      return users.map((u, i) => {
+        const rank = startRank + i;
+        const name = u.full_name || (u.username ? "@" + u.username : "Ambassador #" + u.interlink_id);
+        return `
+          <div class="row ${tierClass(rank)}">
+            <div class="rank-badge">${medal(rank)}</div>
+            <div class="row-name">
+              <div class="n">${escapeHtml(name)}</div>
+              <div class="id">ID ${escapeHtml(u.interlink_id || "-")}</div>
+            </div>
+            <div class="row-acs">${Number(u.acs).toFixed(2)}</div>
+          </div>`;
+      }).join("");
+    }
+
+    async function loadPage(initial) {
+      if (loading) return;
+      loading = true;
+      loadMoreBtn.disabled = true;
+      loadMoreBtn.textContent = "Loading…";
+
+      try {
+        const res = await fetch(`/api/leaderboard?offset=${offset}`, {
+          headers: { "X-Telegram-Init-Data": tg?.initData || "" },
+        });
+
+        if (res.status === 401) {
+          listEl.innerHTML = `<div class="empty-state"><div class="glyph">🔒</div>Open this from inside the Telegram bot to view the leaderboard.</div>`;
+          loadMoreWrap.style.display = "none";
+          return;
+        }
+
+        const data = await res.json();
+        total = data.total;
+
+        if (initial) {
+          listEl.innerHTML = "";
+          if (data.myRank) {
+            document.getElementById("meCard").style.display = "flex";
+            document.getElementById("meRank").textContent = "#" + data.myRank.rank;
+            document.getElementById("meAcs").textContent = Number(data.myRank.acs).toFixed(2) + " ACS";
+          }
+        }
+
+        if (data.page.length === 0 && offset === 0) {
+          listEl.innerHTML = `<div class="empty-state"><div class="glyph">🏆</div>No ambassadors registered yet.<br/>Be the first with /setid.</div>`;
+        } else {
+          listEl.insertAdjacentHTML("beforeend", renderRows(data.page, offset + 1));
+        }
+
+        offset += data.page.length;
+
+        if (offset < total) {
+          loadMoreWrap.style.display = "block";
+        } else {
+          loadMoreWrap.style.display = "none";
+        }
+
+        footnote.textContent = total > 0 ? `Showing ${offset} of ${total} ambassadors` : "";
+      } catch (e) {
+        listEl.innerHTML = `<div class="empty-state"><div class="glyph">⚠️</div>Couldn't load the leaderboard. Try again.</div>`;
+      } finally {
+        loading = false;
+        loadMoreBtn.disabled = false;
+        loadMoreBtn.textContent = "Load more";
+      }
+    }
+
+    loadMoreBtn.addEventListener("click", () => loadPage(false));
+    loadPage(true);
+  </script>
+</body>
+</html>

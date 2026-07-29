@@ -1,171 +1,114 @@
-# 🤖 Interlink ACS Tracker Telegram Bot
+# Interlink ACS Bot — Bot Worker + Panel Worker
 
-A Telegram bot built on **Cloudflare Workers** that tracks and announces ACS (Ambassador Credit Score) updates for [Interlink](https://interlinklabs.ai) ambassadors inside a Telegram group.
-
----
-
-## ✨ Features
-
-- 🔍 **ACS Lookup** — Look up any ambassador's profile, ACS score, badges, and social links
-- 📋 **Daily Tasks** — View the last 10 daily task scores for any Interlink ID
-- 📈 **ACS History** — View recent ACS earning history with timestamps
-- 👥 **Referral Count** — See total referrals alongside profile data
-- 🏆 **Leaderboard** — Top 10 users ranked by ACS with your own rank shown
-- 🔔 **Auto Sync** — Scheduled ACS sync with grouped update announcements in the group
-- 📣 **Topic-Aware Announcements** — Supports Telegram supergroup forum topics
-- 💬 **Say Command** — Owner can send messages to any group topic as the bot
-- 🔒 **Access Control** — Owner / Admin / User role system with rate limiting
-- ⚙️ **Settings Panel** — Toggle bot on/off from a private chat inline keyboard
-- 🛡️ **Duplicate ID Protection** — Prevents two users from registering the same Interlink ID
-
----
-
-## 🏗️ Tech Stack
-
-| Technology | Purpose |
-|---|---|
-| [Cloudflare Workers](https://workers.cloudflare.com) | Serverless runtime |
-| [Cloudflare D1](https://developers.cloudflare.com/d1/) | SQLite database |
-| [Telegram Bot API](https://core.telegram.org/bots/api) | Bot communication |
-| [Interlink API](https://interlinklabs.ai) | ACS & profile data |
-
----
-
-## 📁 Project Structure
+Two independent Cloudflare Workers sharing one D1 database.
 
 ```
-.
-└── src/
-    └── index.js       # All bot logic (single-file Worker)
-wrangler.toml          # Cloudflare Workers config
+bot-worker/     Telegram webhook — commands, callbacks, no UI
+panel-worker/   Mini App (leaderboard + admin panel) and its JSON API
 ```
 
----
+## What changed vs. the old single-file bot
 
-## 🚀 Setup & Deployment
+1. **Secrets/config moved to env vars.** `BOT_TOKEN` is a secret; `OWNER_IDS`,
+   `PANEL_URL`, `INTERLINK_API_BASE` are plain vars in `wrangler.toml`.
+   Nothing is hardcoded in source anymore.
+2. **Topic-tracking removed entirely.** No `known_topics` table, no
+   "detect which forum topic a message came from" logic.
+3. **Group broadcast / `/say` removed entirely.** No `say_pending` table, no
+   topic picker, no `copyMessage` broadcast flow, no `setup-id-gp` /
+   `setup-msg-gp` group commands, no announcement-target table.
+4. **Code is split into small modules** instead of one file:
+   `telegram.js`, `config.js`, `db.js`, `interlink.js`, `callbacks.js`, and
+   one file per command under `handlers/`.
 
-### Prerequisites
+## New features
 
-- [Node.js](https://nodejs.org) 18+
-- [Wrangler CLI](https://developers.cloudflare.com/workers/wrangler/) — `npm install -g wrangler`
-- A Cloudflare account
-- A Telegram bot token from [@BotFather](https://t.me/BotFather)
+- **`/rank`** no longer sends a leaderboard message. It sends one message with
+  an inline "Open Leaderboard" button that launches a Telegram Mini App
+  (`panel-worker`'s `/leaderboard` page). The app paginates 25 rows at a time
+  straight from D1 (`ORDER BY acs DESC LIMIT/OFFSET`), so it scales to any
+  number of users without loading them all into memory or into a chat message.
+- **`/settings`** (owner-only, numeric ID from `OWNER_IDS`) sends an inline
+  "Open Admin Panel" button that launches the `/admin` Mini App. The page is
+  gated server-side: the API validates Telegram's `initData` HMAC and checks
+  the resulting user ID against `OWNER_IDS` before returning anything.
+- **No more `/sync` command.** ACS syncing now lives in the admin panel as a
+  "Run next batch" button that checks 10 users against the Interlink API,
+  updates D1, DMs any user whose ACS increased, and remembers its offset in
+  the `config` table so you can run it batch-by-batch over time (or hit
+  "Reset" to start over).
 
----
+## Database
 
-### 1. Clone the repository
+Both workers must bind the **same D1 database** (same `database_id` in both
+`wrangler.toml` files). Tables, created by `bot-worker`'s `ensureTables()`:
+
+- `users (telegram_id, interlink_id, username, full_name, acs, notifications)`
+  — indexed on `acs DESC` for cheap leaderboard/rank queries.
+- `config (key, value)` — `bot_enabled`, `sync_offset`, `sync_accum`,
+  `commands_registered`.
+- `rate_limit (telegram_id, timestamps)` — per-user command throttling.
+
+## Deploying
+
+### 1. Create the D1 database once
 
 ```bash
-git clone https://github.com/imhamiddev/Interlink-ACS-Checker-Bot.git
-cd REPO_NAME
+wrangler d1 create interlink-db
 ```
 
-### 2. Install dependencies
+Copy the returned `database_id` into **both** `bot-worker/wrangler.toml` and
+`panel-worker/wrangler.toml`.
+
+### 2. Deploy the panel worker first (bot needs its URL)
 
 ```bash
-npm install
+cd panel-worker
+wrangler secret put BOT_TOKEN      # same token as the bot
+wrangler deploy
 ```
 
-### 3. Create a D1 database
+Note the deployed URL (e.g. `https://interlink-panel.<subdomain>.workers.dev`).
+
+### 3. Deploy the bot worker
 
 ```bash
-wrangler d1 create interlink-bot-db
-```
-
-Copy the `database_id` from the output and add it to `wrangler.toml`:
-
-```toml
-[[d1_databases]]
-binding = "DB"
-database_name = "interlink-bot-db"
-database_id = "YOUR_DATABASE_ID_HERE"
-```
-
-### 4. Set your bot token as a secret
-
-```bash
+cd bot-worker
 wrangler secret put BOT_TOKEN
 ```
 
-Paste your bot token when prompted.
-
-### 5. Set your Telegram user ID as owner
-
-In `src/index.js`, find this line and replace with your Telegram numeric ID:
-
-```js
-const OWNER_IDS = [YOUR_TELEGRAM_ID];
-```
-
-### 6. Deploy
+Edit `wrangler.toml`: set `PANEL_URL` to the panel worker's URL from step 2,
+and confirm `OWNER_IDS` (comma-separated numeric Telegram IDs).
 
 ```bash
 wrangler deploy
 ```
 
-### 7. Set the webhook
+### 4. Point the Telegram webhook at the bot worker
 
+```bash
+curl "https://api.telegram.org/bot<TOKEN>/setWebhook?url=https://interlink-bot.<subdomain>.workers.dev"
 ```
-https://api.telegram.org/bot<YOUR_TOKEN>/setWebhook?url=https://YOUR_WORKER.workers.dev
-```
 
----
+### 5. Register the Mini App URLs with BotFather (optional but recommended)
 
-## ⚙️ Configuration
+The bot already sends `web_app` inline buttons pointing at `PANEL_URL`, so
+this works without any BotFather menu configuration — but you can also set
+`/leaderboard` and `/admin` as a persistent Menu Button via `@BotFather` →
+"Menu Button" if you'd like a shortcut outside of the commands.
 
-### Roles
+## Commands
 
-| Role | How to set | Permissions |
+| Command | Who | Behavior |
 |---|---|---|
-| Owner | `OWNER_IDS` array in code | All commands + settings + say |
-| Admin | `ADMIN_IDS` array in code | `/sync` + user commands |
-| User | Anyone in the group | `/setid`, `/acs`, `/top` |
+| `/setid <id>` | anyone | Registers/links a Telegram user to an Interlink ID |
+| `/acs <id>` | anyone | Shows a profile card with Daily Tasks / ACS History buttons |
+| `/rank` | anyone | Opens the leaderboard Mini App |
+| `/settings` | owner only | Opens the admin Mini App |
 
-### Group Setup
+## Design
 
-After adding the bot to your group, run these commands **inside the group** as the owner:
-
-| Command | Description |
-|---|---|
-| `setup-id-gp` | Register the current topic as the ACS announcement channel |
-| `setup-msg-gp` | Register the current topic as the command input channel |
-
----
-
-## 📋 Commands
-
-### User Commands (in group)
-
-| Command | Description |
-|---|---|
-| `/setid <ID>` | Register your Interlink ambassador ID |
-| `/acs <ID>` | Look up profile, ACS, daily tasks, and history |
-| `/top` | Show the top 10 ACS leaderboard |
-
-### Owner Commands (in private)
-
-| Command | Description |
-|---|---|
-| `/say` | Send a message to a group topic as the bot |
-| `/settings` | Toggle bot on/off |
-| `/sync` | Manually sync ACS for all registered users |
-| `/stats` | Show total users and bot status |
-
-### Admin Commands
-
-| Command | Description |
-|---|---|
-| `/sync` | Manually trigger ACS sync |
-
----
-
-## 🔐 Security
-
-> ⚠️ **Never commit** your bot token or any secrets to the repository.
-> Use `wrangler secret put` to store sensitive values securely.
-
----
-
-## 📄 License
-
-MIT
+The Mini Apps share `theme.css`: white background, deep-violet accents
+(`#6D28D9`/`#4C1D95`), Inter typeface, soft card shadows. The leaderboard's
+rank badges use a subtle gold/silver/bronze gradient only for the top 3 —
+an encoding of real rank information rather than decoration.

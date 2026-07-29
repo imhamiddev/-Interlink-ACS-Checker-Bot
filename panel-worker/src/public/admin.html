@@ -1,0 +1,282 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Admin Panel</title>
+<link rel="stylesheet" href="/theme.css" />
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  .wrap { max-width: 640px; margin: 0 auto; padding: 0 20px; }
+
+  .stat-grid {
+    margin: -46px 20px 20px;
+    position: relative;
+    z-index: 2;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+  }
+  .stat-card { padding: 18px 20px; }
+  .stat-card .label { font-size: 12px; color: var(--text-muted); font-weight: 500; }
+  .stat-card .value { font-size: 24px; font-weight: 700; color: var(--text); margin-top: 6px; letter-spacing: -0.02em; }
+
+  .section { padding: 22px; margin-bottom: 16px; }
+  .section-head { display: flex; align-items: center; gap: 12px; margin-bottom: 4px; }
+  .section h2 { margin: 0; font-size: 15.5px; font-weight: 600; letter-spacing: -0.01em; }
+  .section .desc { margin: 10px 0 16px; font-size: 13.5px; color: var(--text-muted); line-height: 1.55; }
+
+  .row-between { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+
+  .progress-track { height: 8px; border-radius: var(--radius-round); background: var(--surface-2); overflow: hidden; margin: 16px 0 10px; }
+  .progress-fill { height: 100%; background: var(--teal); border-radius: var(--radius-round); transition: width 0.4s cubic-bezier(0.4, 0, 0.2, 1); }
+  .progress-label { font-size: 12.5px; color: var(--text-muted); display: flex; justify-content: space-between; }
+
+  .input-row { display: flex; gap: 10px; margin-top: 2px; }
+  input[type="text"] {
+    flex: 1;
+    border: 1.5px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: 11px 14px;
+    font-family: inherit;
+    font-size: 14px;
+    outline: none;
+    background: var(--surface-2);
+    color: var(--text);
+    transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+  }
+  input[type="text"]::placeholder { color: var(--text-faint); }
+  input[type="text"]:focus { border-color: var(--teal-light); background: var(--surface); box-shadow: var(--shadow-focus); }
+
+  .toast {
+    position: fixed;
+    bottom: 24px;
+    left: 50%;
+    transform: translateX(-50%) translateY(16px);
+    background: var(--text);
+    color: #fff;
+    padding: 12px 20px;
+    border-radius: var(--radius-md);
+    font-size: 13.5px;
+    font-weight: 500;
+    opacity: 0;
+    transition: opacity 0.2s ease, transform 0.2s ease;
+    pointer-events: none;
+    box-shadow: var(--shadow-lg);
+    z-index: 50;
+  }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  .toast.err { background: var(--danger); }
+</style>
+</head>
+<body>
+  <div class="header">
+    <p class="eyebrow">🔑 Owner Access</p>
+    <h1>Admin Panel</h1>
+    <p class="sub">Bot controls and ACS sync</p>
+  </div>
+
+  <div class="wrap">
+    <div id="lockScreen" class="card section" style="display:none;">
+      <div class="section-head"><span class="icon-chip coral">🔒</span><h2>Restricted</h2></div>
+      <p class="desc" style="margin-bottom:0;">This panel is only available to the bot owner, opened from inside Telegram.</p>
+    </div>
+
+    <div id="content" style="display:none;">
+      <div class="stat-grid">
+        <div class="card stat-card">
+          <div class="label">Registered users</div>
+          <div class="value" id="statTotal">—</div>
+        </div>
+        <div class="card stat-card">
+          <div class="label">Bot status</div>
+          <div class="value" id="statStatus">—</div>
+        </div>
+      </div>
+
+      <div class="card section">
+        <div class="row-between">
+          <div class="section-head" style="margin-bottom:0;">
+            <span class="icon-chip teal">🎛️</span>
+            <div>
+              <h2>Bot availability</h2>
+            </div>
+          </div>
+          <button class="btn" id="toggleBotBtn">—</button>
+        </div>
+        <p class="desc" style="margin:12px 0 0;">Turn the bot on or off for all users.</p>
+      </div>
+
+      <div class="card section">
+        <div class="section-head">
+          <span class="icon-chip gold">🔄</span>
+          <h2>Manual ACS sync</h2>
+        </div>
+        <p class="desc">Checks 10 registered users per batch against Interlink and updates their ACS. Run batches until complete — no need to do it all at once.</p>
+
+        <div class="progress-track"><div class="progress-fill" id="syncFill" style="width:0%;"></div></div>
+        <div class="progress-label">
+          <span id="syncCheckedLabel">0 checked</span>
+          <span id="syncTotalLabel">of 0</span>
+        </div>
+
+        <div class="row-between" style="margin-top:18px;">
+          <span class="pill pill-on" id="syncUpdatedPill">0 updated</span>
+          <div style="display:flex; gap:8px;">
+            <button class="btn btn-outline" id="syncResetBtn">Reset</button>
+            <button class="btn btn-primary" id="syncRunBtn">Run next batch</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="card section">
+        <div class="section-head">
+          <span class="icon-chip coral">🗑️</span>
+          <h2>Remove a user</h2>
+        </div>
+        <p class="desc">Unregister a user by their Interlink ID. This cannot be undone.</p>
+        <div class="input-row">
+          <input type="text" id="removeInput" placeholder="Interlink ID, e.g. 12345" inputmode="numeric" />
+          <button class="btn btn-danger" id="removeBtn">Remove</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script>
+    const tg = window.Telegram?.WebApp;
+    tg?.ready();
+    tg?.expand();
+    const initData = tg?.initData || "";
+
+    function toast(msg, isErr) {
+      const el = document.getElementById("toast");
+      el.textContent = msg;
+      el.className = "toast show" + (isErr ? " err" : "");
+      setTimeout(() => (el.className = "toast"), 2400);
+    }
+
+    async function api(path, opts = {}) {
+      const res = await fetch("/api" + path, {
+        ...opts,
+        headers: {
+          "Content-Type": "application/json",
+          "X-Telegram-Init-Data": initData,
+          ...(opts.headers || {}),
+        },
+      });
+      if (res.status === 401) throw new Error("unauthorized");
+      return res.json();
+    }
+
+    let botEnabled = true;
+
+    function renderStats(s) {
+      document.getElementById("statTotal").textContent = s.total;
+      document.getElementById("statStatus").textContent = s.enabled ? "Online" : "Paused";
+      document.getElementById("statStatus").style.color = s.enabled ? "var(--success)" : "var(--danger)";
+      botEnabled = s.enabled;
+
+      const btn = document.getElementById("toggleBotBtn");
+      btn.textContent = s.enabled ? "🟢 Turn off" : "🔴 Turn on";
+      btn.className = "btn " + (s.enabled ? "btn-danger" : "btn-success");
+
+      const total = s.total || 0;
+      const checked = Math.min(s.syncOffset, total);
+      const pct = total > 0 ? Math.round((checked / total) * 100) : 0;
+      document.getElementById("syncFill").style.width = pct + "%";
+      document.getElementById("syncCheckedLabel").textContent = `${checked} checked`;
+      document.getElementById("syncTotalLabel").textContent = `of ${total}`;
+      document.getElementById("syncUpdatedPill").textContent = `${s.syncUpdated} updated`;
+    }
+
+    async function loadStats() {
+      const s = await api("/admin/stats");
+      renderStats(s);
+    }
+
+    async function init() {
+      try {
+        await loadStats();
+        document.getElementById("content").style.display = "block";
+      } catch (e) {
+        document.getElementById("lockScreen").style.display = "block";
+      }
+    }
+
+    document.getElementById("toggleBotBtn").addEventListener("click", async () => {
+      const btn = document.getElementById("toggleBotBtn");
+      btn.disabled = true;
+      try {
+        const r = await api("/admin/toggle-bot", { method: "POST" });
+        toast(r.enabled ? "Bot turned on" : "Bot turned off");
+        await loadStats();
+      } catch (e) {
+        toast("Failed to toggle bot", true);
+      } finally {
+        btn.disabled = false;
+      }
+    });
+
+    document.getElementById("syncRunBtn").addEventListener("click", async () => {
+      const btn = document.getElementById("syncRunBtn");
+      btn.disabled = true;
+      btn.textContent = "Running…";
+      try {
+        const r = await api("/admin/sync/run-batch", { method: "POST" });
+        await loadStats();
+        if (r.total === 0) {
+          toast("No users to sync");
+        } else if (r.done) {
+          toast(`Sync complete — ${r.updatedThisBatch} updated in this batch`);
+        } else {
+          toast(`Batch done — checked ${r.checked}/${r.total}`);
+        }
+      } catch (e) {
+        toast("Sync batch failed", true);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = "Run next batch";
+      }
+    });
+
+    document.getElementById("syncResetBtn").addEventListener("click", async () => {
+      try {
+        await api("/admin/sync/reset", { method: "POST" });
+        await loadStats();
+        toast("Sync progress reset");
+      } catch (e) {
+        toast("Failed to reset", true);
+      }
+    });
+
+    document.getElementById("removeBtn").addEventListener("click", async () => {
+      const input = document.getElementById("removeInput");
+      const id = input.value.trim();
+      if (!/^\d+$/.test(id)) {
+        toast("Enter a valid numeric Interlink ID", true);
+        return;
+      }
+      try {
+        const r = await api("/admin/remove-user", {
+          method: "POST",
+          body: JSON.stringify({ interlink_id: id }),
+        });
+        if (r.error) {
+          toast(r.error === "not found" ? "No user with that ID" : "Failed to remove", true);
+        } else {
+          toast("User removed");
+          input.value = "";
+          await loadStats();
+        }
+      } catch (e) {
+        toast("Failed to remove user", true);
+      }
+    });
+
+    init();
+  </script>
+</body>
+</html>
